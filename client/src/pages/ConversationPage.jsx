@@ -1,502 +1,490 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
-import { CONVERSATION_STATES, SUPPORTED_LANGUAGES } from '../utils/constants';
+import Button from '../components/ui/Button';
+import { StatusBadge } from '../components/ui/Badge';
+import TranscriptPanel from '../components/conversation/TranscriptPanel';
+import ClaimPanel from '../components/conversation/ClaimPanel';
+import ConflictPanel from '../components/conversation/ConflictPanel';
+import ClarificationCard from '../components/conversation/ClarificationCard';
+import ConfirmationPanel from '../components/agreement/ConfirmationPanel';
+import VerificationTimeline from '../components/agreement/VerificationTimeline';
+import VoiceRecorder from '../components/voice/VoiceRecorder';
 
 export default function ConversationPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
+
+  // State
   const [conversation, setConversation] = useState(null);
   const [turns, setTurns] = useState([]);
   const [claims, setClaims] = useState([]);
   const [conflicts, setConflicts] = useState([]);
   const [clarifications, setClarifications] = useState([]);
   const [agreement, setAgreement] = useState(null);
-  const [convState, setConvState] = useState('LISTENING');
-  const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [activeSpeaker, setActiveSpeaker] = useState('participant_a');
-  const [textInput, setTextInput] = useState('');
-  const [clarAnswer, setClarAnswer] = useState('');
-  const [error, setError] = useState('');
 
-  // Voice recording
-  const [recording, setRecording] = useState(false);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const [micAllowed, setMicAllowed] = useState(null);
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const timerRef = useRef(null);
+  const [activeSpeaker, setActiveSpeaker] = useState('participant_a');
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState('mediator'); // 'mediator', 'claims', 'agreement'
+
   const transcriptEndRef = useRef(null);
 
-  // Load conversation data
+  // ─── Fetch All Data ───
   const loadData = useCallback(async () => {
     try {
-      const [convoRes, turnsRes, claimsRes, conflictsRes, clarsRes] = await Promise.all([
+      const [convRes, turnsRes, claimsRes, conflictsRes, clarifRes, agrRes] = await Promise.all([
         api.get(`/conversations/${id}`),
         api.get(`/conversations/${id}/turns`),
-        api.get(`/conversations/${id}/claims`),
-        api.get(`/conversations/${id}/conflicts`),
-        api.get(`/conversations/${id}/clarifications`),
+        api.get(`/conversations/${id}/claims`).catch(() => ({ data: { claims: [] } })),
+        api.get(`/conversations/${id}/conflicts`).catch(() => ({ data: { conflicts: [] } })),
+        api.get(`/conversations/${id}/clarifications`).catch(() => ({ data: { clarifications: [] } })),
+        api.get(`/conversations/${id}/agreements`).catch(() => ({ data: { agreement: null } })),
       ]);
-      setConversation(convoRes.data);
-      setTurns(turnsRes.data);
-      setClaims(claimsRes.data);
-      setConflicts(conflictsRes.data);
-      setClarifications(clarsRes.data);
 
-      // Try to load agreement
-      try {
-        const agrRes = await api.get(`/conversations/${id}/agreement`);
-        setAgreement(agrRes.data);
-      } catch { setAgreement(null); }
-
-      // Determine state
-      const openConflicts = conflictsRes.data.filter((c) => c.status === 'open');
-      const pendingClars = clarsRes.data.filter((c) => c.status === 'pending');
-      if (convoRes.data.agreement_status === 'verified') setConvState('VERIFIED');
-      else if (convoRes.data.agreement_status === 'rejected') setConvState('REJECTED');
-      else if (convoRes.data.agreement_status === 'awaiting_confirmation') setConvState('AWAITING_CONFIRMATION');
-      else if (convoRes.data.agreement_status === 'draft') setConvState('AGREEMENT_DRAFTED');
-      else if (pendingClars.length > 0) setConvState('CLARIFICATION_REQUIRED');
-      else if (openConflicts.length > 0) setConvState('CONFLICT_DETECTED');
-      else if (turnsRes.data.length > 0) setConvState('UNDERSTANDING');
-      else setConvState('LISTENING');
+      setConversation(convRes.data.conversation);
+      setTurns(turnsRes.data.turns || []);
+      setClaims(claimsRes.data.claims || []);
+      setConflicts(conflictsRes.data.conflicts || []);
+      setClarifications(clarifRes.data.clarifications || []);
+      setAgreement(agrRes.data.agreement || null);
     } catch (err) {
-      setError('Failed to load conversation.');
+      console.error('[ConversationPage] Load error:', err);
+      setError('Failed to load conversation details.');
     } finally {
       setLoading(false);
     }
   }, [id]);
 
-  useEffect(() => { loadData(); }, [loadData]);
-  useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [turns]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  // ─── Voice Recording ───
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setMicAllowed(true);
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4' });
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-      setRecordingDuration(0);
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [turns]);
 
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mediaRecorder.start(100);
-      setRecording(true);
-      timerRef.current = setInterval(() => setRecordingDuration((d) => d + 1), 1000);
-    } catch {
-      setMicAllowed(false);
-      setError('Microphone access denied. Please allow microphone permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && recording) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
-      setRecording(false);
-      clearInterval(timerRef.current);
-    }
-  };
-
-  const submitRecording = async () => {
-    if (chunksRef.current.length === 0) return;
-    setProcessing(true);
+  // ─── Voice Audio Upload ───
+  const handleUploadAudio = async (audioBlob, mimeType) => {
     setError('');
-    try {
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      const formData = new FormData();
-      formData.append('audio', blob, 'recording.webm');
-      formData.append('speaker', activeSpeaker);
-      formData.append('language', activeSpeaker === 'participant_a' ? conversation.participant_a_language : conversation.participant_b_language);
+    const speakerLang =
+      activeSpeaker === 'participant_a'
+        ? conversation?.participant_a_language || 'en'
+        : conversation?.participant_b_language || 'en';
 
-      await api.post(`/conversations/${id}/audio`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      chunksRef.current = [];
-      setRecordingDuration(0);
-      await loadData();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Audio processing failed.');
-    } finally {
-      setProcessing(false);
-    }
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'speech_recording.webm');
+    formData.append('speaker', activeSpeaker);
+    formData.append('language', speakerLang);
+
+    await api.post(`/conversations/${id}/audio`, formData);
+    await loadData();
+
+    // Toggle active speaker automatically for seamless natural dialog
+    setActiveSpeaker((prev) => (prev === 'participant_a' ? 'participant_b' : 'participant_a'));
   };
 
-  // ─── Text Input ───
-  const submitText = async () => {
-    if (!textInput.trim()) return;
-    setProcessing(true);
+  // ─── Text Input Submit ───
+  const handleSubmitText = async (text) => {
     setError('');
-    try {
-      await api.post(`/conversations/${id}/turns`, {
-        speaker: activeSpeaker,
-        originalText: textInput.trim(),
-        language: activeSpeaker === 'participant_a' ? conversation.participant_a_language : conversation.participant_b_language,
-      });
-      setTextInput('');
-      await loadData();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to add turn.');
-    } finally {
-      setProcessing(false);
-    }
+    const speakerLang =
+      activeSpeaker === 'participant_a'
+        ? conversation?.participant_a_language || 'en'
+        : conversation?.participant_b_language || 'en';
+
+    await api.post(`/conversations/${id}/turns`, {
+      speaker: activeSpeaker,
+      originalText: text,
+      language: speakerLang,
+    });
+    await loadData();
+
+    // Toggle active speaker
+    setActiveSpeaker((prev) => (prev === 'participant_a' ? 'participant_b' : 'participant_a'));
   };
 
-  // ─── Analyze ───
-  const runAnalysis = async () => {
+  // ─── Run AI Analysis (Extract Claims, Detect Conflicts, Update State) ───
+  const handleAnalyze = async () => {
+    if (turns.length === 0) {
+      setError('Add some conversation turns before running AI analysis.');
+      return;
+    }
     setAnalyzing(true);
     setError('');
     try {
-      const res = await api.post(`/conversations/${id}/analyze`);
-      setClaims(res.data.claims);
-      setConflicts(res.data.conflicts);
-      if (res.data.state) setConvState(res.data.state.state);
-
-      // Auto-generate clarifications for open conflicts
-      for (const conflict of res.data.conflicts) {
-        if (conflict.status === 'open') {
-          try {
-            await api.post(`/conversations/${id}/clarifications`, { conflictId: conflict.id });
-          } catch { /* clarification already exists or generation failed */ }
-        }
-      }
+      await api.post(`/conversations/${id}/analysis`);
       await loadData();
     } catch (err) {
-      setError(err.response?.data?.error || 'Analysis failed.');
+      setError(err.response?.data?.error || 'AI analysis encountered an issue.');
     } finally {
       setAnalyzing(false);
     }
   };
 
-  // ─── Answer Clarification ───
-  const submitClarAnswer = async (clarId) => {
-    if (!clarAnswer.trim()) return;
-    setProcessing(true);
+  // ─── Clarification Response Submit ───
+  const handleSubmitClarification = async (clarificationId, answer) => {
+    setError('');
     try {
-      await api.post(`/conversations/${id}/clarifications/${clarId}/answer`, {
-        answer: clarAnswer.trim(),
-        speaker: activeSpeaker,
+      await api.post(`/conversations/${id}/clarifications/${clarificationId}/resolve`, {
+        answer,
       });
-      setClarAnswer('');
       await loadData();
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to submit answer.');
-    } finally {
-      setProcessing(false);
+      setError(err.response?.data?.error || 'Failed to submit clarification.');
     }
   };
 
-  // ─── Agreement ───
-  const generateAgreement = async () => {
-    setProcessing(true);
+  // ─── Generate Proposed Agreement ───
+  const handleDraftAgreement = async () => {
+    setDrafting(true);
+    setError('');
     try {
-      const res = await api.post(`/conversations/${id}/agreement/generate`);
-      setAgreement(res.data);
-      setConvState('AGREEMENT_DRAFTED');
+      await api.post(`/conversations/${id}/agreements`);
       await loadData();
+      setActiveTab('agreement');
     } catch (err) {
-      setError(err.response?.data?.error || 'Agreement generation failed.');
+      setError(err.response?.data?.error || 'Failed to generate draft agreement.');
     } finally {
-      setProcessing(false);
+      setDrafting(false);
     }
   };
 
-  const confirmAgreement = async (participant) => {
-    setProcessing(true);
+  // ─── Confirm Agreement ───
+  const handleConfirm = async (participant) => {
+    if (!agreement) return;
+    setConfirming(true);
+    setError('');
     try {
-      const res = await api.post(`/conversations/${id}/agreement/confirm`, { participant });
-      setAgreement(res.data);
+      await api.post(`/conversations/${id}/agreements/${agreement.id}/confirm`, {
+        participant,
+      });
       await loadData();
     } catch (err) {
-      setError(err.response?.data?.error || 'Confirmation failed.');
+      setError(err.response?.data?.error || 'Failed to confirm agreement.');
     } finally {
-      setProcessing(false);
+      setConfirming(false);
     }
   };
 
-  const rejectAgreement = async (participant) => {
-    setProcessing(true);
+  // ─── Reject Agreement ───
+  const handleReject = async (participant) => {
+    if (!agreement) return;
+    setConfirming(true);
+    setError('');
     try {
-      await api.post(`/conversations/${id}/agreement/reject`, { participant });
+      await api.post(`/conversations/${id}/agreements/${agreement.id}/reject`, {
+        participant,
+        reason: 'Requested modification of terms.',
+      });
       await loadData();
     } catch (err) {
-      setError(err.response?.data?.error || 'Rejection failed.');
+      setError(err.response?.data?.error || 'Failed to request changes.');
     } finally {
-      setProcessing(false);
-    }
-  };
-
-  // ─── TTS ───
-  const playAgreement = async () => {
-    try {
-      const res = await api.post(`/conversations/${id}/tts`, { language: conversation.participant_a_language });
-      const utterance = new SpeechSynthesisUtterance(res.data.text);
-      utterance.lang = res.data.language;
-      speechSynthesis.speak(utterance);
-    } catch {
-      setError('Text-to-speech failed.');
+      setConfirming(false);
     }
   };
 
   if (loading) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}><div className="spinner" style={{ width: '2rem', height: '2rem' }} /></div>;
+    return (
+      <div className="h-[calc(100vh-4rem)] flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-xs text-slate-500 font-medium">Loading conversation workspace...</p>
+        </div>
+      </div>
+    );
   }
 
   if (!conversation) {
-    return <div style={{ textAlign: 'center', padding: '3rem' }}>Conversation not found. <Link to="/dashboard">Go back</Link></div>;
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-base font-bold text-slate-800">Conversation Not Found</h2>
+        <Button variant="primary" size="sm" onClick={() => navigate('/dashboard')} className="mt-4">
+          Return to Dashboard
+        </Button>
+      </div>
+    );
   }
 
-  const stateInfo = CONVERSATION_STATES[convState] || CONVERSATION_STATES.LISTENING;
-  const openConflicts = conflicts.filter((c) => c.status === 'open');
-  const pendingClars = clarifications.filter((c) => c.status === 'pending');
-  const canGenerateAgreement = openConflicts.length === 0 && claims.length > 0 && pendingClars.length === 0;
-
-  const langLabel = (code) => SUPPORTED_LANGUAGES.find((l) => l.code === code)?.label || code;
+  const openConflictsCount = conflicts.filter((c) => c.status === 'open').length;
+  const pendingClarifs = clarifications.filter((c) => c.status === 'pending');
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <div style={{ padding: '0.75rem 1.5rem', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Link to="/dashboard" style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>← Back</Link>
-          <h1 style={{ fontSize: '1.125rem', fontWeight: '700' }}>{conversation.title}</h1>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span className={`badge badge-${stateInfo.color}`}>{stateInfo.icon} {stateInfo.label}</span>
-          {agreement && <Link to={`/conversations/${id}/agreement`} className="btn btn-secondary btn-sm">View Agreement</Link>}
-        </div>
-      </div>
-
-      {/* Participant bar */}
-      <div style={{ padding: '0.5rem 1.5rem', borderBottom: '1px solid var(--color-border)', display: 'flex', gap: '1rem', fontSize: '0.8125rem', flexWrap: 'wrap' }}>
-        <span><strong>A:</strong> {conversation.participant_a_name} ({langLabel(conversation.participant_a_language)})</span>
-        <span>↔</span>
-        <span><strong>B:</strong> {conversation.participant_b_name} ({langLabel(conversation.participant_b_language)})</span>
-      </div>
-
-      {/* Main workspace */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 380px', minHeight: 0 }}>
-        {/* Left: Transcript */}
-        <div style={{ borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, overflow: 'auto', padding: '1rem 1.5rem' }}>
-            {turns.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--color-text-secondary)' }}>
-                <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🎙️</div>
-                <p>No turns yet. Record audio or type to begin.</p>
-              </div>
-            ) : (
-              turns.map((turn) => {
-                const isA = turn.speaker === 'participant_a';
-                return (
-                  <div key={turn.id} className="fade-in" style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', alignItems: isA ? 'flex-start' : 'flex-end' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                      <span className={`badge ${isA ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '0.625rem' }}>
-                        {isA ? conversation.participant_a_name : conversation.participant_b_name}
-                      </span>
-                      <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-secondary)' }}>
-                        {new Date(turn.created_at).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <div style={{
-                      background: isA ? 'rgba(99,102,241,0.1)' : 'rgba(14,165,233,0.1)',
-                      border: `1px solid ${isA ? 'rgba(99,102,241,0.2)' : 'rgba(14,165,233,0.2)'}`,
-                      borderRadius: '0.75rem', padding: '0.75rem 1rem', maxWidth: '80%', fontSize: '0.875rem',
-                    }}>
-                      {turn.original_text}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-            <div ref={transcriptEndRef} />
-          </div>
-        </div>
-
-        {/* Right: AI Intelligence Panel */}
-        <div style={{ overflow: 'auto', padding: '1rem' }}>
-          {/* Claims */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '0.8125rem', fontWeight: '600', marginBottom: '0.75rem', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Claims ({claims.length})
-            </h3>
-            {claims.length === 0 ? (
-              <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>No claims extracted yet. Add conversation turns and analyze.</p>
-            ) : (
-              claims.map((claim) => (
-                <div key={claim.id} style={{ background: 'var(--color-bg)', borderRadius: '0.5rem', padding: '0.625rem', marginBottom: '0.5rem', fontSize: '0.8125rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                    <span className={`badge ${claim.speaker === 'participant_a' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '0.5625rem' }}>
-                      {claim.speaker === 'participant_a' ? conversation.participant_a_name : conversation.participant_b_name}
-                    </span>
-                    <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.6875rem' }}>
-                      {Math.round((claim.confidence || 0.9) * 100)}%
-                    </span>
-                  </div>
-                  <div><strong>{claim.subject}</strong>.{claim.attribute} = {JSON.stringify(claim.value_json?.value || claim.value_json)} {claim.value_json?.unit || ''}</div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Conflicts */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '0.8125rem', fontWeight: '600', marginBottom: '0.75rem', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Conflicts ({conflicts.length})
-            </h3>
-            {conflicts.map((conflict) => (
-              <div key={conflict.id} style={{
-                background: conflict.status === 'open' ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
-                border: `1px solid ${conflict.status === 'open' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}`,
-                borderRadius: '0.5rem', padding: '0.75rem', marginBottom: '0.5rem', fontSize: '0.8125rem',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
-                  <span className={`badge ${conflict.status === 'open' ? 'badge-danger' : 'badge-success'}`}>
-                    {conflict.status === 'open' ? '⚠️ Open' : '✅ Resolved'}
-                  </span>
-                  <span className={`badge badge-${conflict.severity === 'high' || conflict.severity === 'critical' ? 'danger' : 'warning'}`}>
-                    {conflict.severity}
-                  </span>
-                </div>
-                <p style={{ marginBottom: '0.375rem' }}>{conflict.description}</p>
-                {conflict.clarification_question && conflict.status === 'open' && (
-                  <p style={{ color: 'var(--color-secondary)', fontStyle: 'italic', fontSize: '0.75rem' }}>
-                    💡 {conflict.clarification_question}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Clarifications */}
-          {pendingClars.length > 0 && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '0.8125rem', fontWeight: '600', marginBottom: '0.75rem', color: 'var(--color-warning)', textTransform: 'uppercase' }}>
-                ❓ Clarification Needed
-              </h3>
-              {pendingClars.map((clar) => (
-                <div key={clar.id} style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '0.5rem', padding: '0.75rem', marginBottom: '0.5rem' }}>
-                  <p style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.75rem' }}>{clar.question}</p>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <input className="input" style={{ flex: 1 }} placeholder="Type your answer..." value={clarAnswer} onChange={(e) => setClarAnswer(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && submitClarAnswer(clar.id)} />
-                    <button className="btn btn-primary btn-sm" onClick={() => submitClarAnswer(clar.id)} disabled={processing || !clarAnswer.trim()}>
-                      Answer
-                    </button>
-                  </div>
-                </div>
-              ))}
+    <div className="flex flex-col h-[calc(100vh-4rem)] md:h-screen bg-slate-50">
+      {/* Top Header Bar */}
+      <header className="bg-white border-b border-slate-200/80 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 flex-shrink-0 z-10">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="p-1 text-slate-400 hover:text-slate-700 rounded-md hover:bg-slate-100 transition-colors"
+            title="Back to dashboard"
+          >
+            ←
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-bold text-slate-900 truncate max-w-xs sm:max-w-md">
+                {conversation.title}
+              </h1>
+              <StatusBadge state={conversation.state} size="sm" />
             </div>
-          )}
+            <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+              <span>{conversation.category || 'General'}</span>
+              <span>•</span>
+              <span className="text-indigo-700 font-medium">{conversation.participant_a_name} ({conversation.participant_a_language})</span>
+              <span>&</span>
+              <span className="text-purple-700 font-medium">{conversation.participant_b_name} ({conversation.participant_b_language})</span>
+            </div>
+          </div>
+        </div>
 
-          {/* Agreement Preview */}
-          {agreement && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '0.8125rem', fontWeight: '600', marginBottom: '0.75rem', color: 'var(--color-success)', textTransform: 'uppercase' }}>
-                📋 Agreement {agreement.status === 'verified' ? '✅' : ''}
-              </h3>
-              <div className="card" style={{ fontSize: '0.8125rem' }}>
-                <p style={{ marginBottom: '0.75rem' }}>{agreement.summary}</p>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                  <span className={`badge ${agreement.participant_a_confirmed ? 'badge-success' : 'badge-neutral'}`}>
-                    {conversation.participant_a_name}: {agreement.participant_a_confirmed ? '✅ Confirmed' : '⏳ Pending'}
-                  </span>
-                  <span className={`badge ${agreement.participant_b_confirmed ? 'badge-success' : 'badge-neutral'}`}>
-                    {conversation.participant_b_name}: {agreement.participant_b_confirmed ? '✅ Confirmed' : '⏳ Pending'}
-                  </span>
-                </div>
-                {agreement.status !== 'verified' && (
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    {!agreement.participant_a_confirmed && (
-                      <button className="btn btn-success btn-sm" onClick={() => confirmAgreement('participant_a')} disabled={processing}>
-                        {conversation.participant_a_name} Confirms
-                      </button>
-                    )}
-                    {!agreement.participant_b_confirmed && (
-                      <button className="btn btn-success btn-sm" onClick={() => confirmAgreement('participant_b')} disabled={processing}>
-                        {conversation.participant_b_name} Confirms
-                      </button>
-                    )}
-                    <button className="btn btn-danger btn-sm" onClick={() => rejectAgreement(activeSpeaker)} disabled={processing}>
-                      Reject
-                    </button>
-                  </div>
+        {/* Action Controls */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={analyzing}
+            onClick={handleAnalyze}
+            icon="🧠"
+          >
+            AI Analyze
+          </Button>
+
+          {agreement ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => navigate(`/conversations/${id}/agreement`)}
+              icon="📄"
+            >
+              View Document
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              loading={drafting}
+              disabled={turns.length === 0 || openConflictsCount > 0}
+              onClick={handleDraftAgreement}
+              icon="📋"
+            >
+              Draft Agreement
+            </Button>
+          )}
+        </div>
+      </header>
+
+      {/* Global Error Banner */}
+      {error && (
+        <div className="px-4 py-2 bg-rose-50 border-b border-rose-200 text-xs text-rose-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+          <button onClick={() => setError('')} className="font-bold text-rose-500 hover:text-rose-800">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Split Workspace Layout */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+        {/* LEFT PANE: LIVE CONVERSATION (Turns + Audio Recorder) */}
+        <div className="flex-1 flex flex-col border-r border-slate-200/80 bg-white overflow-hidden">
+          <TranscriptPanel
+            turns={turns}
+            conversation={conversation}
+            claims={claims}
+            activeSpeaker={activeSpeaker}
+            onSpeakerChange={setActiveSpeaker}
+            transcriptEndRef={transcriptEndRef}
+          />
+
+          {/* Docked Voice Recorder */}
+          <VoiceRecorder
+            conversationId={id}
+            activeSpeaker={activeSpeaker}
+            speakerName={
+              activeSpeaker === 'participant_a'
+                ? conversation.participant_a_name
+                : conversation.participant_b_name
+            }
+            language={
+              activeSpeaker === 'participant_a'
+                ? conversation.participant_a_language
+                : conversation.participant_b_language
+            }
+            onUploadAudio={handleUploadAudio}
+            onSubmitText={handleSubmitText}
+          />
+        </div>
+
+        {/* RIGHT PANE: AI MEDIATOR & AGREEMENT VERIFICATION */}
+        <div className="w-full md:w-[420px] lg:w-[460px] bg-slate-50 flex flex-col overflow-hidden flex-shrink-0 border-t md:border-t-0">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200 bg-white px-4">
+            <button
+              onClick={() => setActiveTab('mediator')}
+              className={`py-3 px-3 text-xs font-bold border-b-2 transition-colors ${
+                activeTab === 'mediator'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              AI Mediator {openConflictsCount > 0 && <span className="ml-1 text-rose-600 font-extrabold">({openConflictsCount})</span>}
+            </button>
+            <button
+              onClick={() => setActiveTab('claims')}
+              className={`py-3 px-3 text-xs font-bold border-b-2 transition-colors ${
+                activeTab === 'claims'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Extracted Claims ({claims.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('agreement')}
+              className={`py-3 px-3 text-xs font-bold border-b-2 transition-colors ${
+                activeTab === 'agreement'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Agreement {agreement && <span className="ml-1 text-emerald-600 font-extrabold">✓</span>}
+            </button>
+          </div>
+
+          {/* Right Pane Scroll Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {activeTab === 'mediator' && (
+              <div className="space-y-4">
+                {/* Clarifications in progress */}
+                {pendingClarifs.map((clarif) => (
+                  <ClarificationCard
+                    key={clarif.id}
+                    clarification={clarif}
+                    conversation={conversation}
+                    onSubmitAnswer={handleSubmitClarification}
+                  />
+                ))}
+
+                {/* Conflicts Panel */}
+                <ConflictPanel
+                  conflicts={conflicts}
+                  claims={claims}
+                  conversation={conversation}
+                  onResolveConflict={handleAnalyze}
+                />
+
+                {/* Verification Confirmation if Agreement exists */}
+                {agreement && (
+                  <ConfirmationPanel
+                    agreement={agreement}
+                    conversation={conversation}
+                    onConfirm={handleConfirm}
+                    onReject={handleReject}
+                    loading={confirming}
+                  />
                 )}
-                {agreement.status === 'verified' && (
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                    <button className="btn btn-secondary btn-sm" onClick={playAgreement}>🔊 Play Agreement</button>
-                    <Link to={`/conversations/${id}/agreement`} className="btn btn-primary btn-sm">📄 Full View</Link>
+
+                {/* Audit Trail Timeline */}
+                <VerificationTimeline
+                  turnsCount={turns.length}
+                  claimsCount={claims.length}
+                  conflictsCount={conflicts.length}
+                  clarificationsCount={clarifications.length}
+                  agreement={agreement}
+                />
+              </div>
+            )}
+
+            {activeTab === 'claims' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Structured Commitments
+                  </h4>
+                  <span className="text-xs text-slate-400 font-mono">{claims.length} total</span>
+                </div>
+                <ClaimPanel claims={claims} conversation={conversation} />
+              </div>
+            )}
+
+            {activeTab === 'agreement' && (
+              <div className="space-y-4">
+                {agreement ? (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">
+                          Draft Agreement
+                        </span>
+                        <StatusBadge state={agreement.status === 'verified' ? 'VERIFIED' : 'AGREEMENT_DRAFTED'} size="sm" />
+                      </div>
+
+                      <div className="p-3 bg-slate-50 rounded-lg text-xs text-slate-800 leading-relaxed font-mono">
+                        {agreement.summary || 'Summary terms drafted.'}
+                      </div>
+
+                      {agreement.agreement_json && (
+                        <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                          {Object.entries(agreement.agreement_json).map(([key, val]) => (
+                            <div key={key} className="flex justify-between py-1 border-b border-slate-50">
+                              <span className="font-medium text-slate-500 capitalize">{key.replace(/_/g, ' ')}:</span>
+                              <span className="font-bold text-slate-900">
+                                {typeof val === 'object' ? `${val.value} ${val.unit || ''}` : String(val)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <ConfirmationPanel
+                      agreement={agreement}
+                      conversation={conversation}
+                      onConfirm={handleConfirm}
+                      onReject={handleReject}
+                      loading={confirming}
+                    />
+
+                    <div className="flex justify-center">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => navigate(`/conversations/${id}/agreement`)}
+                        icon="🖨️"
+                      >
+                        Print Formal Certificate
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-white">
+                    <div className="text-3xl mb-2">📋</div>
+                    <h4 className="text-xs font-bold text-slate-800 mb-1">
+                      No Agreement Drafted Yet
+                    </h4>
+                    <p className="text-xs text-slate-500 mb-4 max-w-xs mx-auto">
+                      Speak turns, extract claims, and resolve any detected conflicts to generate a formal agreement.
+                    </p>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={turns.length === 0 || openConflictsCount > 0}
+                      loading={drafting}
+                      onClick={handleDraftAgreement}
+                    >
+                      Generate Draft Agreement
+                    </Button>
                   </div>
                 )}
               </div>
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <button className="btn btn-primary" onClick={runAnalysis} disabled={analyzing || turns.length === 0}>
-              {analyzing ? <><span className="spinner" /> Analyzing...</> : '🧠 Analyze Conversation'}
-            </button>
-            {canGenerateAgreement && (
-              <button className="btn btn-success" onClick={generateAgreement} disabled={processing}>
-                {processing ? <><span className="spinner" /> Generating...</> : '📋 Generate Agreement'}
-              </button>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom: Input Controls */}
-      <div style={{ borderTop: '1px solid var(--color-border)', padding: '0.75rem 1.5rem' }}>
-        {error && (
-          <div style={{ background: 'rgba(239,68,68,0.1)', borderRadius: '0.5rem', padding: '0.5rem 0.75rem', marginBottom: '0.5rem', color: '#f87171', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between' }}>
-            {error}
-            <button onClick={() => setError('')} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Speaker Selector */}
-          <div style={{ display: 'flex', gap: '0.25rem' }}>
-            <button className={`btn btn-sm ${activeSpeaker === 'participant_a' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setActiveSpeaker('participant_a')}>
-              {conversation.participant_a_name}
-            </button>
-            <button className={`btn btn-sm ${activeSpeaker === 'participant_b' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setActiveSpeaker('participant_b')}>
-              {conversation.participant_b_name}
-            </button>
-          </div>
-
-          {/* Voice Controls */}
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            {!recording ? (
-              <button className="btn btn-danger btn-sm" onClick={startRecording} disabled={processing}>
-                🎙️ Record
-              </button>
-            ) : (
-              <>
-                <button className="btn btn-secondary btn-sm recording-pulse" onClick={stopRecording} style={{ background: '#ef4444', color: 'white' }}>
-                  ⏹️ Stop ({recordingDuration}s)
-                </button>
-              </>
-            )}
-            {!recording && chunksRef.current.length > 0 && (
-              <button className="btn btn-success btn-sm" onClick={submitRecording} disabled={processing}>
-                {processing ? <span className="spinner" /> : '📤'} Submit Audio
-              </button>
-            )}
-          </div>
-
-          {/* Text Input */}
-          <div style={{ flex: 1, display: 'flex', gap: '0.5rem' }}>
-            <input className="input" value={textInput} onChange={(e) => setTextInput(e.target.value)}
-              placeholder={`Type as ${activeSpeaker === 'participant_a' ? conversation.participant_a_name : conversation.participant_b_name}...`}
-              onKeyDown={(e) => e.key === 'Enter' && submitText()} disabled={processing} />
-            <button className="btn btn-primary btn-sm" onClick={submitText} disabled={processing || !textInput.trim()}>
-              {processing ? <span className="spinner" /> : 'Send'}
-            </button>
           </div>
         </div>
       </div>

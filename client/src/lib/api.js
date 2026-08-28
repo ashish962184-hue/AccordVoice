@@ -5,12 +5,18 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL
     ? `${import.meta.env.VITE_API_BASE_URL}/api`
     : '/api',
-  headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach auth token from Supabase session or local storage
+// Attach auth token from Supabase session or local storage & handle FormData
 api.interceptors.request.use(async (config) => {
   try {
+    // If sending FormData, delete Content-Type so the browser sets multipart/form-data with boundary
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    } else if (!config.headers['Content-Type']) {
+      config.headers['Content-Type'] = 'application/json';
+    }
+
     let token = null;
 
     if (supabase) {

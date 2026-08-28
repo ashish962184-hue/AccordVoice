@@ -16,6 +16,8 @@ const LANGUAGE_LABELS = {
 
 // ─── Categories ───
 const CATEGORIES = [
+  'Business & Commercial', 'Real Estate & Renting', 'Freelance & Contract',
+  'Partnership & Co-founding', 'Family & Household', 'Other / General',
   'business_negotiation', 'procurement', 'logistics', 'construction',
   'field_services', 'personal_commitments', 'team_coordination', 'customer_resolution',
   'other',
@@ -44,14 +46,22 @@ const ParticipantSchema = z.object({
   role: z.string().trim().max(100).optional().default(''),
 });
 
-// ─── Conversation Create ───
+// ─── Conversation Create (Supports Nested or Flattened) ───
 const ConversationCreateSchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(120),
-  category: z.string().trim().min(1).max(50),
+  category: z.string().trim().min(1).max(50).optional().default('General'),
   purpose: z.string().trim().max(500).optional().default(''),
-  participantA: ParticipantSchema,
-  participantB: ParticipantSchema,
+  description: z.string().trim().max(500).optional().default(''),
+  participantA: ParticipantSchema.optional(),
+  participantB: ParticipantSchema.optional(),
+  participantAName: z.string().trim().max(100).optional(),
+  participantALanguage: z.string().max(10).optional(),
+  participantARole: z.string().trim().max(100).optional(),
+  participantBName: z.string().trim().max(100).optional(),
+  participantBLanguage: z.string().max(10).optional(),
+  participantBRole: z.string().trim().max(100).optional(),
   expectedFields: z.array(z.string().trim().max(50)).optional().default([]),
+  agreementFields: z.array(z.string().trim().max(50)).optional().default([]),
 });
 
 // ─── Conversation Update ───
@@ -71,12 +81,13 @@ const TurnCreateSchema = z.object({
 // ─── Clarification Answer ───
 const ClarificationAnswerSchema = z.object({
   answer: z.string().trim().min(1, 'Answer is required').max(2000),
-  speaker: z.enum(['participant_a', 'participant_b']),
+  speaker: z.enum(['participant_a', 'participant_b']).optional().default('participant_a'),
 });
 
 // ─── Agreement Confirmation ───
 const AgreementConfirmSchema = z.object({
   participant: z.enum(['participant_a', 'participant_b']),
+  reason: z.string().optional(),
 });
 
 // ─── AI Output Schemas ───

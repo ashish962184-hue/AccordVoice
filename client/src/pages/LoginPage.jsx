@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -38,65 +40,102 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-      <div className="card fade-in" style={{ maxWidth: '420px', width: '100%' }}>
-        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: '700', marginBottom: '0.5rem' }}>
-            🎙️ AccordVoice
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
+        {/* Brand */}
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white text-2xl mx-auto shadow-md mb-3">
+            🎙️
+          </div>
+          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
+            AccordVoice
           </h1>
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
-            Sign in to your account
+          <p className="text-xs text-slate-500 mt-1">
+            Sign in to your conversational mediation workspace
           </p>
         </div>
 
-        {isLocalMode && (
-          <div style={{
-            background: 'rgba(14, 165, 233, 0.1)',
-            border: '1px solid rgba(14, 165, 233, 0.3)',
-            borderRadius: '0.5rem',
-            padding: '0.625rem 0.75rem',
-            marginBottom: '1rem',
-            color: '#38bdf8',
-            fontSize: '0.75rem',
-            lineHeight: 1.4,
-          }}>
-            ⚡ <strong>Local Demo Mode Active:</strong> Ready to use with local persistence & Gemini AI. Enter any email & password or click 1-Click Demo.
-          </div>
-        )}
+        <Card padding="p-6 sm:p-8" className="shadow-md">
+          {isLocalMode && (
+            <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-800 leading-snug">
+              ⚡ <strong>Local Demo Mode Active:</strong> Ready with local database & Gemini AI. Enter any email or use 1-Click Demo.
+            </div>
+          )}
 
-        {error && (
-          <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '0.5rem', padding: '0.75rem', marginBottom: '1rem', color: '#f87171', fontSize: '0.8125rem' }}>
-            {error}
-          </div>
-        )}
+          {error && (
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+              <span>⚠️</span>
+              <span>{error}</span>
+            </div>
+          )}
 
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '1rem' }}>
-            <label>Email</label>
-            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
-          </div>
-          <div style={{ marginBottom: '1.25rem' }}>
-            <label>Password</label>
-            <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
-          </div>
-          <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', marginBottom: '0.75rem' }}>
-            {loading ? <><span className="spinner" /> Signing in...</> : 'Sign In'}
-          </button>
-        </form>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Email Address
+              </label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
 
-        <button
-          type="button"
-          onClick={handleDemoLogin}
-          disabled={loading}
-          className="btn btn-secondary"
-          style={{ width: '100%', borderColor: 'rgba(99, 102, 241, 0.4)', color: 'var(--color-primary-light)' }}
-        >
-          🚀 1-Click Demo Login
-        </button>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
 
-        <p style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
-          Don't have an account? <Link to="/register" style={{ color: 'var(--color-primary)' }}>Create one</Link>
-        </p>
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              loading={loading}
+              className="w-full justify-center shadow-sm"
+            >
+              Sign In
+            </Button>
+          </form>
+
+          <div className="relative my-5">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-2 text-slate-400 font-medium">Or</span>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            disabled={loading}
+            onClick={handleDemoLogin}
+            className="w-full justify-center"
+          >
+            🚀 1-Click Demo Login
+          </Button>
+
+          <p className="text-center text-xs text-slate-500 mt-6">
+            Don't have an account?{' '}
+            <Link to="/register" className="font-semibold text-indigo-600 hover:text-indigo-700">
+              Create an account
+            </Link>
+          </p>
+        </Card>
       </div>
     </div>
   );

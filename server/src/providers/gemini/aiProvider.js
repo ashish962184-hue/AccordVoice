@@ -112,7 +112,7 @@ function fallbackExtractClaims(turns) {
   const priceRegex = /(?:₹|\$|€|£|rs\.?|inr|usd)\s*(\d+(?:,\d+)*(?:\.\d+)?)/i;
 
   turns.forEach((turn) => {
-    const text = turn.original_text || '';
+    const text = turn.original_text || turn.text || '';
     const speaker = turn.speaker || 'participant_a';
 
     // Quantity / units
@@ -210,7 +210,7 @@ function fallbackDetectConflicts(claims) {
 
 // ─── Extract Claims ───
 async function extractClaims(turns, conversationContext) {
-  const turnsText = turns.map((t, i) => `Turn ${i + 1} [${t.speaker}] (${t.language || 'unknown'}): "${t.original_text}"`).join('\n');
+  const turnsText = turns.map((t, i) => `Turn ${i + 1} [${t.speaker}] (${t.language || 'unknown'}): "${t.original_text || t.text || ''}"`).join('\n');
 
   const prompt = `Extract all meaningful factual or actionable claims from this conversation.
 

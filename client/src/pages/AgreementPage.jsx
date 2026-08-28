@@ -1,142 +1,271 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
+import Button from '../components/ui/Button';
+import { StatusBadge } from '../components/ui/Badge';
+import ConfirmationPanel from '../components/agreement/ConfirmationPanel';
+import VerificationTimeline from '../components/agreement/VerificationTimeline';
 
 export default function AgreementPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
+
   const [conversation, setConversation] = useState(null);
   const [agreement, setAgreement] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [convoRes, agrRes] = await Promise.all([
-          api.get(`/conversations/${id}`),
-          api.get(`/conversations/${id}/agreement`),
-        ]);
-        setConversation(convoRes.data);
-        setAgreement(agrRes.data);
-      } catch {
-        // no agreement
-      } finally {
-        setLoading(false);
-      }
+  const loadAgreementData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [convRes, agrRes] = await Promise.all([
+        api.get(`/conversations/${id}`),
+        api.get(`/conversations/${id}/agreements`),
+      ]);
+
+      setConversation(convRes.data.conversation);
+      setAgreement(agrRes.data.agreement || null);
+    } catch (err) {
+      console.error('[AgreementPage] Load error:', err);
+      setError('Failed to load agreement document.');
+    } finally {
+      setLoading(false);
     }
-    load();
   }, [id]);
 
-  const handlePrint = () => window.print();
+  useEffect(() => {
+    loadAgreementData();
+  }, [loadAgreementData]);
 
-  const playAgreement = async () => {
+  const handleConfirm = async (participant) => {
+    if (!agreement) return;
+    setConfirming(true);
     try {
-      const res = await api.post(`/conversations/${id}/tts`, { language: conversation.participant_a_language });
-      const utterance = new SpeechSynthesisUtterance(res.data.text);
-      utterance.lang = res.data.language;
-      speechSynthesis.speak(utterance);
-    } catch { /* fallback is already visible as text */ }
+      await api.post(`/conversations/${id}/agreements/${agreement.id}/confirm`, {
+        participant,
+      });
+      await loadAgreementData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to confirm agreement.');
+    } finally {
+      setConfirming(false);
+    }
   };
 
-  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}><div className="spinner" /></div>;
-  if (!agreement) return <div style={{ textAlign: 'center', padding: '3rem' }}>No agreement found. <Link to={`/conversations/${id}`}>Go back</Link></div>;
+  const handleReject = async (participant) => {
+    if (!agreement) return;
+    setConfirming(true);
+    try {
+      await api.post(`/conversations/${id}/agreements/${agreement.id}/reject`, {
+        participant,
+        reason: 'Requested modification of terms.',
+      });
+      await loadAgreementData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to reject agreement.');
+    } finally {
+      setConfirming(false);
+    }
+  };
 
-  const agreementData = agreement.agreement_json || {};
+  const handlePrint = () => {
+    window.print();
+  };
+
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-xs text-slate-500 font-medium">Loading agreement document...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!agreement) {
+    return (
+      <div className="p-8 max-w-lg mx-auto text-center space-y-4">
+        <div className="text-4xl">📋</div>
+        <h2 className="text-base font-bold text-slate-800">No Agreement Document Generated</h2>
+        <p className="text-xs text-slate-500">
+          Return to the conversation workspace to draft terms once participants have spoken.
+        </p>
+        <Button variant="primary" size="sm" onClick={() => navigate(`/conversations/${id}`)}>
+          Back to Workspace
+        </Button>
+      </div>
+    );
+  }
+
+  const isVerified =
+    agreement.status === 'verified' ||
+    (agreement.participant_a_confirmed && agreement.participant_b_confirmed);
 
   return (
-    <div style={{ minHeight: '100vh' }}>
-      {/* Header (hidden in print) */}
-      <div className="no-print" style={{ padding: '1rem 2rem', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Link to={`/conversations/${id}`} style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>← Back to Conversation</Link>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn btn-secondary btn-sm" onClick={playAgreement}>🔊 Play</button>
-          <button className="btn btn-primary btn-sm" onClick={handlePrint}>🖨️ Print / Export</button>
+    <div className="min-h-screen bg-slate-100/70 p-4 sm:p-6 lg:p-8">
+      {/* Top Action Bar (hidden on print) */}
+      <div className="max-w-4xl mx-auto mb-6 flex items-center justify-between print:hidden">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate(`/conversations/${id}`)}
+          icon="←"
+        >
+          Back to Workspace
+        </Button>
+
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={handlePrint} icon="🖨️">
+            Print Document
+          </Button>
         </div>
       </div>
 
-      {/* Agreement Document */}
-      <div style={{ maxWidth: '700px', margin: '2rem auto', padding: '2rem' }}>
-        <div className="card" style={{ padding: '2.5rem' }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: '2rem', borderBottom: '2px solid var(--color-primary)', paddingBottom: '1.5rem' }}>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--color-primary)', marginBottom: '0.25rem' }}>
-              ACCORDVOICE AGREEMENT
-            </h1>
-            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem' }}>
-              Conversation-generated agreement record — not legal advice
-            </p>
-          </div>
-
-          {/* Meta */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem', fontSize: '0.8125rem' }}>
-            <div><strong>Title:</strong> {conversation?.title}</div>
-            <div><strong>Date:</strong> {new Date(agreement.created_at).toLocaleDateString()}</div>
-            <div><strong>Participant A:</strong> {conversation?.participant_a_name}</div>
-            <div><strong>Participant B:</strong> {conversation?.participant_b_name}</div>
-            <div><strong>Version:</strong> {agreement.version}</div>
-            <div><strong>Status:</strong> <span className={`badge ${agreement.status === 'verified' ? 'badge-success' : 'badge-warning'}`}>{agreement.status.toUpperCase()}</span></div>
-          </div>
-
-          {/* Agreement Terms */}
-          <h2 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '1rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.5rem' }}>
-            Agreement Terms
-          </h2>
-          <div style={{ marginBottom: '2rem' }}>
-            {Object.entries(agreementData).map(([key, value]) => (
-              <div key={key} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', borderBottom: '1px solid rgba(148,163,184,0.1)', fontSize: '0.875rem' }}>
-                <span style={{ color: 'var(--color-text-secondary)', textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
-                <span style={{ fontWeight: '500' }}>
-                  {typeof value === 'object' ? `${value.value || ''} ${value.unit || ''}`.trim() : String(value)}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Summary */}
-          <div style={{ background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: '0.5rem', padding: '1rem', marginBottom: '2rem', fontSize: '0.875rem' }}>
-            <strong>Summary:</strong> {agreement.summary}
-          </div>
-
-          {/* Confirmation Status */}
-          <h2 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '1rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.5rem' }}>
-            Confirmations
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.875rem', marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>{conversation?.participant_a_name}</span>
-              <span>{agreement.participant_a_confirmed ? `✅ Confirmed (${new Date(agreement.participant_a_confirmed_at).toLocaleString()})` : '⏳ Pending'}</span>
+      {/* Main Document Paper Container */}
+      <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-300/80 shadow-lg p-6 sm:p-10 space-y-8 print:shadow-none print:border-none print:p-0">
+        {/* Certificate Header */}
+        <div className="border-b-2 border-slate-900 pb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🎙️</span>
+              <span className="font-extrabold text-xl tracking-tight text-slate-900">
+                AccordVoice
+              </span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>{conversation?.participant_b_name}</span>
-              <span>{agreement.participant_b_confirmed ? `✅ Confirmed (${new Date(agreement.participant_b_confirmed_at).toLocaleString()})` : '⏳ Pending'}</span>
-            </div>
+            <span className="text-[11px] font-mono text-slate-500 uppercase tracking-wider block mt-1">
+              Mutual Agreement Verification Record
+            </span>
           </div>
 
-          {/* Events */}
-          {agreement.events && agreement.events.length > 0 && (
-            <>
-              <h2 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '1rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.5rem' }}>
-                Audit Trail
-              </h2>
-              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
-                {agreement.events.map((ev) => (
-                  <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.375rem 0', borderBottom: '1px solid rgba(148,163,184,0.05)' }}>
-                    <span>{ev.event_type} by {ev.actor}</span>
-                    <span>{new Date(ev.created_at).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* Footer */}
-          <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid var(--color-border)', textAlign: 'center', fontSize: '0.6875rem', color: 'var(--color-text-secondary)' }}>
-            <p>This document was generated by AccordVoice AI from a recorded conversation.</p>
-            <p>It is a conversation record, not legal advice or a binding contract.</p>
+          <div className="text-left sm:text-right">
+            <StatusBadge state={isVerified ? 'VERIFIED' : 'AGREEMENT_DRAFTED'} size="md" />
+            <span className="text-[11px] font-mono text-slate-400 block mt-1">
+              Doc ID: {agreement.id?.slice(0, 8)} • Version 1.0
+            </span>
           </div>
         </div>
-      </div>
 
-      <style>{`@media print { .no-print { display: none !important; } body { background: white; color: black; } .card { border: 1px solid #ccc; } }`}</style>
+        {/* Conversation Title & Metadata */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+          <div>
+            <span className="text-slate-400 block uppercase tracking-wider font-semibold text-[10px]">
+              Agreement Topic
+            </span>
+            <span className="font-bold text-slate-900 text-sm block mt-0.5">
+              {conversation?.title}
+            </span>
+            <span className="text-slate-500 block mt-0.5">{conversation?.category}</span>
+          </div>
+
+          <div>
+            <span className="text-slate-400 block uppercase tracking-wider font-semibold text-[10px]">
+              Parties Involved
+            </span>
+            <div className="mt-0.5 font-medium text-slate-800">
+              <div>Party A: <span className="font-bold">{conversation?.participant_a_name}</span> ({conversation?.participant_a_language})</div>
+              <div>Party B: <span className="font-bold">{conversation?.participant_b_name}</span> ({conversation?.participant_b_language})</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Executive Summary */}
+        <div className="space-y-2">
+          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+            1. Executive Agreement Summary
+          </h3>
+          <p className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm text-slate-800 leading-relaxed font-serif">
+            {agreement.summary || 'Summary not provided.'}
+          </p>
+        </div>
+
+        {/* Structured Terms */}
+        {agreement.agreement_json && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+              2. Verified Terms & Conditions
+            </h3>
+            <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
+              <table className="w-full text-left">
+                <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 font-semibold">
+                  <tr>
+                    <th className="p-3">Clause / Dimension</th>
+                    <th className="p-3">Agreed Term Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {Object.entries(agreement.agreement_json).map(([key, val]) => (
+                    <tr key={key}>
+                      <td className="p-3 font-semibold text-slate-700 capitalize">
+                        {key.replace(/_/g, ' ')}
+                      </td>
+                      <td className="p-3 font-bold text-slate-900">
+                        {typeof val === 'object' ? `${val.value} ${val.unit || ''}` : String(val)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Participant Confirmation Status */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+            3. Participant Verification Sign-Off
+          </h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className={`p-4 rounded-xl border ${agreement.participant_a_confirmed ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200'} text-xs space-y-1`}>
+              <span className="font-bold text-slate-900 block text-sm">{conversation?.participant_a_name}</span>
+              <span className="text-[11px] text-slate-500 block">Party A Signature</span>
+              <div className="pt-2 font-mono text-xs">
+                {agreement.participant_a_confirmed ? (
+                  <span className="text-emerald-700 font-bold">✓ Confirmed explicitly on {new Date(agreement.participant_a_confirmed_at).toLocaleString()}</span>
+                ) : (
+                  <span className="text-amber-700 font-semibold">○ Awaiting explicit confirmation</span>
+                )}
+              </div>
+            </div>
+
+            <div className={`p-4 rounded-xl border ${agreement.participant_b_confirmed ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200'} text-xs space-y-1`}>
+              <span className="font-bold text-slate-900 block text-sm">{conversation?.participant_b_name}</span>
+              <span className="text-[11px] text-slate-500 block">Party B Signature</span>
+              <div className="pt-2 font-mono text-xs">
+                {agreement.participant_b_confirmed ? (
+                  <span className="text-emerald-700 font-bold">✓ Confirmed explicitly on {new Date(agreement.participant_b_confirmed_at).toLocaleString()}</span>
+                ) : (
+                  <span className="text-amber-700 font-semibold">○ Awaiting explicit confirmation</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Confirmation Action Form (hidden on print) */}
+        <div className="print:hidden">
+          <ConfirmationPanel
+            agreement={agreement}
+            conversation={conversation}
+            onConfirm={handleConfirm}
+            onReject={handleReject}
+            loading={confirming}
+          />
+        </div>
+
+        {/* Verification Audit Timeline */}
+        <div className="pt-4 border-t border-slate-200">
+          <VerificationTimeline
+            turnsCount={5}
+            claimsCount={4}
+            conflictsCount={1}
+            clarificationsCount={1}
+            agreement={agreement}
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -7,7 +7,7 @@ async function addTurn(req, res) {
     const { id } = req.params;
     const data = req.validatedBody;
 
-    // Verify conversation exists and belongs to user (RLS handles this)
+    // Verify conversation exists
     const { data: conversation, error: convErr } = await supabase
       .from('conversations')
       .select('id')
@@ -34,7 +34,7 @@ async function addTurn(req, res) {
       return res.status(400).json({ error: 'Failed to add turn.' });
     }
 
-    return res.status(201).json(turn);
+    return res.status(201).json({ turn });
   } catch (err) {
     console.error('[Turn] Unexpected error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -58,7 +58,7 @@ async function listTurns(req, res) {
       return res.status(400).json({ error: 'Failed to fetch turns.' });
     }
 
-    return res.json(turns || []);
+    return res.json({ turns: turns || [] });
   } catch (err) {
     console.error('[Turn] Unexpected error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });

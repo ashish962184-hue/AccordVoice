@@ -11,15 +11,25 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Multer config
+// Multer config with normalized audio MIME detection
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   limits: { fileSize: config.upload.maxFileSize },
   fileFilter: (req, file, cb) => {
-    if (config.upload.allowedMimeTypes.includes(file.mimetype)) {
+    const rawMime = file.mimetype || '';
+    const baseMime = rawMime.split(';')[0].trim().toLowerCase();
+
+    if (
+      baseMime.startsWith('audio/') ||
+      baseMime === 'video/webm' ||
+      baseMime === 'video/mp4' ||
+      baseMime === 'application/octet-stream' ||
+      config.upload.allowedMimeTypes.includes(baseMime)
+    ) {
       cb(null, true);
     } else {
+      console.warn(`[Audio Upload] Unsupported MIME type received: ${file.mimetype}`);
       cb(new Error(`Unsupported audio format: ${file.mimetype}`));
     }
   },
@@ -44,14 +54,20 @@ async function processAudio(req, res) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'No audio file provided.' });
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: 'No audio data received or recording was empty.' });
     }
+
+    // Clean MIME type (strip codecs info for provider compatibility)
+    const rawMime = req.file.mimetype || 'audio/webm';
+    const cleanMime = rawMime.split(';')[0].trim().toLowerCase();
+
+    console.info(`[Audio] Received ${req.file.buffer.length} bytes, MIME: ${rawMime} -> clean: ${cleanMime}`);
 
     // Transcribe using Gemini
     const transcription = await transcribeAudio(
       req.file.buffer,
-      req.file.mimetype,
+      cleanMime,
       expectedLanguage
     );
 

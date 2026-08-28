@@ -6,21 +6,32 @@ async function createConversation(req, res) {
     const supabase = createUserClient(req.accessToken, req.user?.id);
     const data = req.validatedBody;
 
+    const nameA = data.participantA?.name || data.participantAName || 'Participant A';
+    const langA = data.participantA?.language || data.participantALanguage || 'en';
+    const roleA = data.participantA?.role || data.participantARole || '';
+
+    const nameB = data.participantB?.name || data.participantBName || 'Participant B';
+    const langB = data.participantB?.language || data.participantBLanguage || 'en';
+    const roleB = data.participantB?.role || data.participantBRole || '';
+
+    const expectedFields = data.expectedFields?.length ? data.expectedFields : (data.agreementFields || []);
+
     const { data: conversation, error } = await supabase
       .from('conversations')
       .insert({
         user_id: req.user.id,
         title: data.title,
-        category: data.category,
-        purpose: data.purpose || '',
-        participant_a_name: data.participantA.name,
-        participant_a_language: data.participantA.language,
-        participant_a_role: data.participantA.role || '',
-        participant_b_name: data.participantB.name,
-        participant_b_language: data.participantB.language,
-        participant_b_role: data.participantB.role || '',
-        expected_fields: data.expectedFields || [],
+        category: data.category || 'General',
+        purpose: data.purpose || data.description || '',
+        participant_a_name: nameA,
+        participant_a_language: langA,
+        participant_a_role: roleA,
+        participant_b_name: nameB,
+        participant_b_language: langB,
+        participant_b_role: roleB,
+        expected_fields: expectedFields,
         status: 'active',
+        state: 'LISTENING',
         agreement_status: 'pending',
       })
       .select()
@@ -31,7 +42,7 @@ async function createConversation(req, res) {
       return res.status(400).json({ error: 'Failed to create conversation.' });
     }
 
-    return res.status(201).json(conversation);
+    return res.status(201).json({ conversation });
   } catch (err) {
     console.error('[Conversation] Unexpected error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -54,14 +65,14 @@ async function listConversations(req, res) {
       return res.status(400).json({ error: 'Failed to fetch conversations.' });
     }
 
-    return res.json(conversations || []);
+    return res.json({ conversations: conversations || [] });
   } catch (err) {
     console.error('[Conversation] Unexpected error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
 
-// ─── Get Conversation ───
+// ─── Get Conversation by ID ───
 async function getConversation(req, res) {
   try {
     const supabase = createUserClient(req.accessToken, req.user?.id);
@@ -77,9 +88,9 @@ async function getConversation(req, res) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
 
-    return res.json(conversation);
+    return res.json({ conversation });
   } catch (err) {
-    console.error('[Conversation] Unexpected error:', err.message);
+    console.error('[Conversation] Get error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
@@ -93,18 +104,19 @@ async function updateConversation(req, res) {
 
     const { data: conversation, error } = await supabase
       .from('conversations')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', id)
       .select()
       .single();
 
     if (error || !conversation) {
-      return res.status(404).json({ error: 'Conversation not found or update failed.' });
+      console.error('[Conversation] Update error:', error?.message);
+      return res.status(400).json({ error: 'Failed to update conversation.' });
     }
 
-    return res.json(conversation);
+    return res.json({ conversation });
   } catch (err) {
-    console.error('[Conversation] Unexpected error:', err.message);
+    console.error('[Conversation] Update error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
@@ -121,12 +133,13 @@ async function deleteConversation(req, res) {
       .eq('id', id);
 
     if (error) {
+      console.error('[Conversation] Delete error:', error.message);
       return res.status(400).json({ error: 'Failed to delete conversation.' });
     }
 
     return res.json({ message: 'Conversation deleted.' });
   } catch (err) {
-    console.error('[Conversation] Unexpected error:', err.message);
+    console.error('[Conversation] Delete error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
@@ -136,22 +149,26 @@ async function getDashboardStats(req, res) {
   try {
     const supabase = createUserClient(req.accessToken, req.user?.id);
 
-    const { data: conversations } = await supabase
+    const { data: convs, error } = await supabase
       .from('conversations')
-      .select('id, status, agreement_status')
+      .select('*')
       .eq('user_id', req.user.id);
 
-    const convos = conversations || [];
+    if (error) {
+      return res.status(400).json({ error: 'Failed to fetch stats.' });
+    }
+
+    const conversations = convs || [];
     const stats = {
-      totalConversations: convos.length,
-      verifiedAgreements: convos.filter((c) => c.agreement_status === 'verified').length,
-      pendingClarifications: convos.filter((c) => c.status === 'active' && c.agreement_status !== 'verified').length,
-      unresolved: convos.filter((c) => c.agreement_status === 'rejected').length,
+      total: conversations.length,
+      active: conversations.filter((c) => !['VERIFIED', 'REJECTED'].includes(c.state)).length,
+      conflicts: conversations.filter((c) => c.state === 'CONFLICT_DETECTED').length,
+      clarifications: conversations.filter((c) => c.state === 'CLARIFICATION_REQUIRED').length,
+      verified: conversations.filter((c) => c.state === 'VERIFIED').length,
     };
 
     return res.json(stats);
   } catch (err) {
-    console.error('[Dashboard] Stats error:', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
